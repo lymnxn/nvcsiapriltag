@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "browse": {
+                "databaseFilename": "",
+                "limitSymbolsToIncludedHeaders": true
+            },
+            "includePath": [
+                "/home/helabnx/code/vicon_ws/devel/include/**",
+                "/opt/ros/melodic/include/**",
+                "/usr/include/**",
+                "/usr/local/include/jetson-utils"
+            ],
+            "name": "ROS",
+            "compileCommands": "${workspaceFolder}/build/compile_commands.json"
+        }
+    ],
+    "version": 4
+}

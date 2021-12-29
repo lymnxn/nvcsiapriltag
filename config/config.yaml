@@ -1,0 +1,12 @@
+width:            1280
+height:           720
+framerate:        60
+tag_decimate:     1.0
+max_tag_num:      20
+fx:               8.6640902038184322e+02
+fy:               8.6640902038184322e+02
+cx:               6.3950000000000000e+02
+cy:               3.5950000000000000e+02
+filpmethod:       "none"
+display:          true
+zerocopy:         false
