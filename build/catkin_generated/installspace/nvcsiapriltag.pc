@@ -1,0 +1,8 @@
+prefix=/usr/local
+
+Name: nvcsiapriltag
+Description: Description of nvcsiapriltag
+Version: 1.0.0
+Cflags: -I${prefix}/include
+Libs: -L${prefix}/lib 
+Requires: roscpp message_runtime std_msgs nodelet

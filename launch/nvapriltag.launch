@@ -1,0 +1,14 @@
+<launch>
+    <include file="$(find vicon_bridge)/launch/vicon.launch"/>
+    <include file="$(find nlink_parser)/launch/linktrack_aoa.launch"/>
+    <include file="$(find mavros)/launch/px4.launch">
+        <arg name="fcu_url" value="/dev/ttyTHS1:3000000"/>
+        <arg name="gcs_url" value="udp://:14555@192.168.10.235:14551"/>
+        <arg name="tgt_system" value="1"/>
+    </include> 
+    <node pkg="nvcsiapriltag" type="nvcsiapriltag" name="nvcsiapriltag" output="screen">
+        <rosparam file="$(find nvcsiapriltag)/config/config.yaml" command="load"/>
+    </node>
+    <node pkg="mocap_node" type="node" name="vicontopx4" output="screen">
+    </node>
+</launch>

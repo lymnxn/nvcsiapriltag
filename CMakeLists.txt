@@ -74,7 +74,7 @@ message("-- output path:  ${PROJECT_OUTPUT_DIR}")
 # set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_OUTPUT_DIR}/lib)
 # set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_OUTPUT_DIR}/lib)
 
-find_package(catkin REQUIRED COMPONENTS roscpp cpp_common message_generation std_msgs sensor_msgs)
+find_package(catkin REQUIRED COMPONENTS roscpp cpp_common message_generation std_msgs sensor_msgs geometry_msgs)
 find_package(Boost REQUIRED COMPONENTS filesystem program_options system)
 find_package(vpi REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -108,6 +108,7 @@ add_message_files(
 generate_messages(
     DEPENDENCIES
     std_msgs
+    geometry_msgs
     )
 
 catkin_package(

@@ -1,8 +1,6 @@
 #include "ros/ros.h"
 #include "std_msgs/String.h"
 
-
-
 #include <videoSource.h>
 #include <videoOutput.h>
 #include <commandLine.h>
@@ -31,6 +29,16 @@
 #include <opencv2/cudaimgproc.hpp>
 #include "cuda.h"		  // NOLINT - include .h without directory
 #include "cuda_runtime.h" // NOLINT - include .h without directory
+
+#include "nvcsiapriltag/AprilTagDetection.h"
+#include "nvcsiapriltag/AprilTagDetectionArray.h"
+#include <image_transport/image_transport.h>
+#include <sensor_msgs/image_encodings.h>
+#include <tf/transform_broadcaster.h>
+#include "std_msgs/Header.h"
+#include "geometry_msgs/PoseWithCovarianceStamped.h"
+#include "eigen3/Eigen/Core"
+#include "eigen3/Eigen/Geometry"
 
 
 bool signal_recieved = false;
@@ -185,47 +193,74 @@ struct AprilTagsImpl
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "nvcsiapriltag");
-    ros::NodeHandle nh;
+    ros::NodeHandle nh("~");
     ROS_INFO("Start CSI Camera Apriltag Detected");
     ros::Rate loop_rate(1000);
-	ros::Publisher pub=nh.advertise<nvcsiapriltag::AprilTagDectionArray>("apriltag_handle",60);
-	nvcsiapriltag::AprilTagDectionArray msg;
+	ros::Publisher pub=nh.advertise<nvcsiapriltag::AprilTagDetectionArray>("apriltag_handle",60);
+	// ros::Publisher pub_img_info;
+	// ros::Publisher pub_img;
+	// sensor_msgs::Image img;
+	nvcsiapriltag::AprilTagDetectionArray msg;
     CailbrateData caildata;
+	image_transport::CameraPublisher image_pub_;
 	AprilTagsInfo aprilti;
 	videoOptions opt;
 	std::unique_ptr<AprilTagsImpl> impl_(std::make_unique<AprilTagsImpl>());
     if (signal(SIGINT, sig_handler) == SIG_ERR)
 		ROS_ERROR("can't catch SIGINT");
-    nh.param<size_t>("max_tag_num", aprilti.max_tags_, (size_t)20);
-	nh.param<float>("tag_decimate", aprilti.tag_edge_size_, 1.0f);
-	nh.param<uint32_t>("width", opt.width, (uint32_t)1280);
-	nh.param<uint32_t>("height", opt.height, (uint32_t)720);
-	nh.param<float>("framerate", opt.frameRate, 60.0f);
-	std::string flipmethod;
-	nh.param<std::string>("filpmethod", flipmethod, 0);
+    aprilti.max_tags_=			nh.param<int>("max_tag_num", 20);
+	aprilti.tag_edge_size_=		nh.param<float>("tag_decimate", 1.0f);
+	opt.width=					nh.param<int>("width", 1280);
+	opt.height=					nh.param<int>("height", 720);
+	opt.frameRate=				nh.param<float>("framerate", 60.0f);
+	std::string flipmethod=		nh.param<std::string>("filpmethod", std::string("none"));
 	opt.FlipMethodFromStr(flipmethod.data());
-    nh.param<bool>("zerocopy", opt.zeroCopy, false);
+	opt.zeroCopy=				nh.param<bool>("zerocopy", false);
+	bool isdisplay=				nh.param<bool>("display", false);
+	bool publish_tf_=			nh.param<bool>("publish_tf", false);
+	caildata.cameraMatrix=cv::Mat::zeros(3,3,CV_64F);
+	*(double *)(caildata.cameraMatrix.row(0).col(0).data)=nh.param<double>("fx", 8.6640902038184322e+02);
+	*(double *)(caildata.cameraMatrix.row(1).col(1).data)=nh.param<double>("fy", 8.6640902038184322e+02);
+	*(double *)(caildata.cameraMatrix.row(0).col(2).data)=nh.param<double>("cx", 6.3950000000000000e+02);
+	*(double *)(caildata.cameraMatrix.row(1).col(2).data)=nh.param<double>("cy", 3.5950000000000000e+02);
+	// bool publish_img_=			nh.param<bool>("publish_img", false);
+	// if(publish_img_)
+	// {
+	// 	pub_img_info=nh.advertise<sensor_msgs::CameraInfo>("/camera/camera_info",1);
+	// 	pub_img=nh.advertise<sensor_msgs::Image>("/camera/camera_rect",60);
+	// }
 	// std::cout << "Camera Info:\nWidth = " << opt.width << "\nHeight = " << opt.height << "\nFrameRate = " << opt.frameRate << "\n"
 	// 		  << opt.FlipMethodToStr << std::endl;
-	ROS_INFO("Apriltag INFO: max_tag_num = %d     tag_decimate = %d", aprilti.max_tags_, aprilti.tag_edge_size_);
-	ROS_INFO("Camera_Info:\nWidth = %d\n Height = %d\nFrameRate = %d\n, FlipMethod = %s\n", opt.width, opt.height, opt.frameRate, opt.FlipMethodToStr);
+	ROS_INFO("Apriltag INFO: max_tag_num = %lu     tag_decimate = %f", aprilti.max_tags_, aprilti.tag_edge_size_);
+	ROS_INFO("Camera_Info:\nWidth = %u\t Height = %u\tFrameRate = %f\t, FlipMethod = %s\t", opt.width, opt.height, opt.frameRate, (char*)opt.FlipMethodToStr);
 	videoSource *input = videoSource::Create("csi://0", opt);
     if (!input)
 	{
         ROS_ERROR("Error: Failed to create input stream");
 		exit(-1);
 	}
-    videoOutput *output = videoOutput::Create("display://0");
-	if (!output)
+    	if(isdisplay)
+		ROS_INFO("Display ON");
+    videoOutput *output;
+    	if(isdisplay)
+		output= videoOutput::Create("display://0");
+	if (isdisplay&&!output)
 	{
 		ROS_ERROR("Error: Failed to create output stream");
 		delete input;
 		exit(-2);
 	}
     unsigned int framecnt = 0;
-    while(ros::ok&&(!signal_recieved))
+	unsigned int seq=0;
+	// img.height=input->GetHeight();
+	// img.width=input->GetWidth();
+	// img.is_bigendian=0;
+	// img.step=input->GetWidth()*sizeof(uchar4);
+	// img.data.resize(img.step*img.height);
+	// ROS_INFO("Height = %u, Width = %u, isbigendian=%u, encoding = %s, step = %u". img.height, img.width, img.is_bigendian, img.encoding.to_str(), img.step);
+    while(ros::ok()&&(!signal_recieved))
     {
-        uchar4 *imgRGBA = NULL;
+        static uchar4 *imgRGBA = NULL;
         if (!input->Capture(&imgRGBA, 1000))
 		{
 			if (!input->IsStreaming())
@@ -233,10 +268,20 @@ int main(int argc, char **argv)
             ROS_ERROR("failed to capture next frame");
 			continue;
 		}
+		msg.header.stamp=ros::Time::now();
+		// if(image_pub_)
+		// {
+		// 	img.header.stamp=ros::Time::now();
+		// 	img.data.data()=(uint8_t*)imgRGBA;
+		// }
         if (impl_->april_tags_handle == nullptr)
 		{
-			cv::cuda::GpuMat img_rgba8(input->GetHeight(), input->GetWidth(), CV_8UC4, imgRGBA);
-			impl_->initialize(aprilti, caildata, input->GetWidth(), input->GetHeight(), img_rgba8.size().width * img_rgba8.size().height * img_rgba8.elemSize(), img_rgba8.step1());
+			// ROS_INFO("width=%u height=%u",input->GetWidth(), input->GetHeight());
+			// cv::cuda::GpuMat img_rgba8(input->GetHeight(), input->GetWidth(), CV_8UC4, imgRGBA);
+			// ROS_INFO("elemsize=%lu  \t height=%d  step=%lu",img_rgba8.elemSize(), img_rgba8.size().height, img_rgba8.step1());
+			// impl_->initialize(aprilti, caildata, input->GetWidth(), input->GetHeight(), img_rgba8.size().width * img_rgba8.size().height * img_rgba8.elemSize(), img_rgba8.step1());
+			impl_->initialize(aprilti, caildata, input->GetWidth(), input->GetHeight(), input->GetWidth()*input->GetHeight()*4, 4*input->GetWidth());
+			// ROS_INFO("init finish");
 		}
         impl_->input_image_buffer = (char *)imgRGBA;
 		impl_->input_image.dev_ptr = reinterpret_cast<uchar4 *>(imgRGBA);
@@ -249,7 +294,67 @@ int main(int argc, char **argv)
 			ROS_INFO("Failed to run AprilTags detector (error code %d)", error);
 			return -1;
 		}
-        if (output != NULL)
+		if(num_detections>0)
+		{
+			msg.header.frame_id="CSI";
+			msg.header.seq=seq;
+			msg.detections.resize(num_detections);
+			for(unsigned int i=0;i<num_detections;++i)
+			{
+				msg.detections[i].id=impl_->tags[i].id;
+				msg.detections[i].hamming_error=impl_->tags[i].hamming_error;
+				geometry_msgs::PoseWithCovarianceStamped &pose=msg.detections[i].pose;
+				pose.header=msg.header;
+				pose.pose.pose.position.x=impl_->tags[i].translation[0];
+				pose.pose.pose.position.y=impl_->tags[i].translation[1];
+				pose.pose.pose.position.z=impl_->tags[i].translation[2];
+				Eigen::Matrix3d rot;
+				for(int j=0;j<3;++j)
+				{
+					for(int k=0;k<3;++k)
+					{
+						rot(j,k)=impl_->tags[i].orientation[j*3+k];
+					}
+				}
+				Eigen::Quaterniond rot_quaternion(rot);
+				pose.pose.pose.orientation.x = rot_quaternion.x();
+				pose.pose.pose.orientation.y = rot_quaternion.y();
+				pose.pose.pose.orientation.z = rot_quaternion.z();
+				pose.pose.pose.orientation.w = rot_quaternion.w();
+				for(int j=0;j<9;++j)
+				{
+					msg.detections[i].orientation[j]=impl_->tags[i].orientation[j];
+				}
+				for(int j=0;j<3;++j)
+				{
+					msg.detections[i].translation[j]=impl_->tags[i].translation[j];
+				}
+				for(int j=0;j<4;++j)
+				{
+					msg.detections[i].corners[j<<1]=impl_->tags[i].corners[j].x;
+					msg.detections[i].corners[(j<<1)|1]=impl_->tags[i].corners[j].y;
+				}
+				pub.publish(msg);
+			}
+			// if (publish_tf_) {
+			// 	for (unsigned int i=0; i<num_detections; i++) {
+			// 	geometry_msgs::PoseStamped pose;
+			// 	// pose.pose = tag_detection_array.detections[i].pose.pose.pose;
+			// 	// pose.header = tag_detection_array.detections[i].pose.header;
+			// 	pose.pose = msg.detections[i].pose.pose.pose;
+			// 	pose.header=msg.detections[i].pose.header;
+			// 	tf::Stamped<tf::Transform> tag_transform;
+			// 	tf::poseStampedMsgToTF(pose, tag_transform);
+			// 	// tf_pub_.sendTransform(tf::StampedTransform(tag_transform,
+			// 	// 											tag_transform.stamp_,
+			// 	// 											image->header.frame_id,
+			// 	// 											detection_names[i]));
+			// 	}
+			// }
+
+		}
+		++seq;
+        if (isdisplay && output != NULL)
 		{
 			static int cnt = 0;
 			static float sum = 0;
@@ -261,23 +366,23 @@ int main(int argc, char **argv)
 				static char str[256];
 				sprintf(str, "Camera Viewer (%ux%u) | %.0f FPS %d", input->GetWidth(), input->GetHeight(), sum /= 10, num_detections);
 				output->SetStatus(str);
-				if (num_detections)
-				{
-					// std::cout << "Frame : " << framecnt << "\t Apriltag num : " << num_detections << std::endl;
-					for (int i = 0; i < num_detections; ++i)
-					{
-						if(impl_->tags[i].id!=2)
-							continue;
-						// std::cout << impl_->tags[i].id << "\n";
-						for (int j = 0; j < 3; ++j)
-							std::cout << impl_->tags[i].translation[j] << "\t\t";
-						std::cout << std::endl;
-						for(int j=0;j<4;++j)
-						{
-							std::cout<<impl_->tags[i].corners[j].x<<" \t "<<impl_->tags[i].corners[j].y<<std::endl;
-						}
-					}
-				}
+				// if (num_detections)
+				// {
+				// 	// std::cout << "Frame : " << framecnt << "\t Apriltag num : " << num_detections << std::endl;
+				// 	for (int i = 0; i < num_detections; ++i)
+				// 	{
+				// 		if(impl_->tags[i].id!=2)
+				// 			continue;
+				// 		// std::cout << impl_->tags[i].id << "\n";
+				// 		for (int j = 0; j < 3; ++j)
+				// 			std::cout << impl_->tags[i].translation[j] << "\t\t";
+				// 		std::cout << std::endl;
+				// 		for(int j=0;j<4;++j)
+				// 		{
+				// 			std::cout<<impl_->tags[i].corners[j].x<<" \t "<<impl_->tags[i].corners[j].y<<std::endl;
+				// 		}
+				// 	}
+				// }
 				sum = 0;
 				cnt = 0;
 			}
@@ -289,16 +394,17 @@ int main(int argc, char **argv)
 				signal_recieved = true;
 		}
         ros::spinOnce();
-        loop_rate.sleep();
+        // loop_rate.sleep();
     }
     /*
 	 * destroy resources
 	 */
-	ROS_INFO("\ncamera-viewer:  shutting down...\n");
+	ROS_INFO("nvcsiapriltag:  shutting down...\n");
 
 	SAFE_DELETE(input);
-	SAFE_DELETE(output);
+	if(isdisplay)
+	    SAFE_DELETE(output);
 
-	ROS_INFO("camera-viewer:  shutdown complete.\n");
+	ROS_INFO("nvcsiapriltag:  shutdown complete.\n");
     return 0;
 }
